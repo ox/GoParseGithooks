@@ -8,41 +8,55 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
+	// "io/ioutil"
+	"net/http"
 	"strings"
 )
-
-var steps = []string{
-	"created-branch-added-file-commit-changed-file-commit",
-	"sync-fixup-shove",
-	"added-1-commit-added-2-commit-added-3-commit",
-	"sync-fixup-2-shove",
-	"merge-foo-from-github-ui",
-}
 
 var repositories = make(map[int]*Repository)
 
 func main() {
-	for _, step := range steps {
-		text, _ := ioutil.ReadFile(step + ".json")
-		parseGitHookMessage(text)
-	}
+	http.HandleFunc("/", func(res http.ResponseWriter, req *http.Request) {
+		io.WriteString(res, "hello world")
+	})
 
-	for _, repo := range repositories {
-		fmt.Println(repo)
-	}
+	http.HandleFunc("/git-hook", func(res http.ResponseWriter, req *http.Request) {
+		if req.Method != "POST" {
+			io.WriteString(res, "thanks")
+		} else {
+			parseGitHookMessage(req.FormValue("payload"))
+			req.Body.Close()
+
+			for _, repo := range repositories {
+				fmt.Println(repo)
+			}
+		}
+	})
+
+	fmt.Println("listening on :8080")
+	http.ListenAndServe(":8080", nil)
 }
 
-func parseGitHookMessage(text []byte) {
+func parseGitHookMessage(text string) {
 	var hook GitHookMessage
-	json.Unmarshal(text, &hook)
+	err := json.Unmarshal([]byte(text), &hook)
+	if err != nil {
+		fmt.Println("json unmarshal:", err.Error())
+		fmt.Print(string(text))
+		return
+	}
 
 	var repo = hook.Repository
-	var storedRepo, ok = repositories[repo.Id]
-	if !ok {
+	var storedRepo, repoExists = repositories[repo.Id]
+	if !repoExists {
 		repo.Branches = make(map[string]*Branch)
 		storedRepo = repo
 		repositories[storedRepo.Id] = repo
+	}
+
+	if hook.Deleted {
+		delete(storedRepo.Branches, hook.Ref)
 	}
 
 	if hook.Created {
@@ -52,19 +66,21 @@ func parseGitHookMessage(text []byte) {
 	}
 
 	if hook.Forced && !hook.Created {
-		var branch = storedRepo.Branches[hook.Ref]
-		var found = false
+		var branch, branchExists = storedRepo.Branches[hook.Ref]
+		if branchExists {
+			var found = false
 
-		for i, commit := range branch.Commits {
-			if commit.Id == hook.Before {
-				branch.Commits = append(branch.Commits[:i-1], hook.Commits...)
-				found = true
-				break
+			for i, commit := range branch.Commits {
+				if commit.Id == hook.Before {
+					branch.Commits = append(branch.Commits[:i-1], hook.Commits...)
+					found = true
+					break
+				}
 			}
-		}
 
-		if !found {
-			branch.Commits = append(branch.Commits, hook.Commits...)
+			if !found {
+				branch.Commits = append(branch.Commits, hook.Commits...)
+			}
 		}
 	}
 
@@ -76,11 +92,26 @@ func parseGitHookMessage(text []byte) {
 			indexBeforeNewlines := strings.Index(lastCommit.Message[indexAfterOrg:], "\n\n")
 
 			branchName := lastCommit.Message[indexAfterOrg : indexAfterOrg+indexBeforeNewlines]
-			storedRepo.Branches["refs/heads/"+branchName].Merged = true
+			branch, branchExists := storedRepo.Branches["refs/heads/"+branchName]
+			if !branchExists {
+				storedRepo.Branches["refs/heads/"+branchName] = &Branch{"refs/heads/" + branchName, true, hook.Commits}
+			} else {
+				branch.Merged = true
+			}
 		} else if hook.Base_ref != "" {
 			storedRepo.Branches[hook.Base_ref].Merged = true
 		} else {
 			fmt.Println("I don't know how this was merged")
 		}
+	} else {
+		// normal commit
+		var commits = storedRepo.Branches[hook.Ref].Commits
+
+		if commits == nil {
+			commits = hook.Commits
+		} else {
+			storedRepo.Branches[hook.Ref].Commits = append(commits, hook.Commits...)
+		}
+
 	}
 }
