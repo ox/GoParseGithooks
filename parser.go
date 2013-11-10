@@ -65,19 +65,22 @@ func extractGithook(text string) (*GitHookMessage, error) {
 	return &hook, nil
 }
 
-func applyGitHook(hook *GitHookMessage) {
+func applyGitHook(hook *GitHookMessage) error {
 	var repo, repoExists = repositories[hook.Repository.Id]
 	if !repoExists {
 		repo = hook.Repository
 		repo.Branches = make(map[string]*Branch)
 		repositories[repo.Id] = repo
+		fmt.Println("created repository", repo.Name, "with id", hook.Repository.Id)
 	}
 
 	rest := stripRefsHeads(hook.Ref)
 	_, branchName, err := extractSprintNameAndBranchName(rest)
-	if err != nil {
+	if err != nil && rest != repo.Master_branch {
 		fmt.Println(err.Error())
-		return
+		return err
+	} else if rest == repo.Master_branch {
+		branchName = repo.Master_branch
 	}
 
 	// is a new branch being created that doesn't exist
@@ -85,20 +88,21 @@ func applyGitHook(hook *GitHookMessage) {
 	branch, branchExists := repo.Branches[branchName]
 	if !branchExists {
 		if hook.Created {
-			// is the branch being created
-			branch = &Branch{branchName, false, hook.Commits, repo}
+			// is the branch being created, don't add the commits just yet
+			branch = &Branch{branchName, false, nil, repo}
 			repo.Branches[branchName] = branch
-		} else {
-			// if we arent' tracking a branch from the start, don't do anything
-			fmt.Println("branch doesn't exist. Ignoring.")
-			return
+		} else if branchName != repo.Master_branch && hook.Base_ref == "" {
+			// if we arent' tracking a branch from the start and
+			// we're not merging into the master branch, don't do anything
+			fmt.Println("branch", branchName, "doesn't exist. Ignoring.")
+			return nil
 		}
 	}
 
 	// is the branch being deleted
 	if hook.Deleted {
 		delete(repo.Branches, branchName)
-		return
+		return nil
 	}
 
 	// force-pushing an existing branch
@@ -133,7 +137,12 @@ func applyGitHook(hook *GitHookMessage) {
 			}
 		} else if hook.Base_ref != "" {
 			// merge from command line
-			baseBranchName := sprintBranchRegex.FindAllStringSubmatch(hook.Base_ref, -1)[0][1]
+			rest := stripRefsHeads(hook.Base_ref)
+			_, baseBranchName, err := extractSprintNameAndBranchName(rest)
+			if err != nil {
+				return err
+			}
+
 			repo.Branches[baseBranchName].Merged = true
 		} else {
 			fmt.Println("I don't know how this was merged")
@@ -145,6 +154,7 @@ func applyGitHook(hook *GitHookMessage) {
 		} else {
 			branch.Commits = append(branch.Commits, hook.Commits...)
 		}
-
 	}
+
+	return nil
 }

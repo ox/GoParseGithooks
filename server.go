@@ -35,7 +35,7 @@ func main() {
 				return
 			}
 
-			parseGithook(hook)
+			applyGitHook(hook)
 		}
 	})
 
