@@ -18,17 +18,18 @@ type Commit struct {
 }
 
 type Branch struct {
-	Ref     string
-	Merged  bool
-	Commits []*Commit
+	Ref        string
+	Merged     bool
+	Commits    []*Commit
+	Repository *Repository
 }
 
 type Repository struct {
 	Id            int
 	Name          string
 	Master_branch string
-	Branches      map[string]*Branch
 	Organization  string
+	Branches      map[string]*Branch
 }
 
 func (commit Commit) String() string {
